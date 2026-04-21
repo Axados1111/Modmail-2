@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import os
+import sqlite3
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -10,11 +11,39 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 MODMAIL_CHANNEL_ID = int(os.getenv("MODMAIL_CHANNEL_ID"))
 
-active_threads = {}
+# 🗄️ SQLite setup
+conn = sqlite3.connect("modmail.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS tickets (
+    user_id INTEGER PRIMARY KEY,
+    thread_id INTEGER
+)
+""")
+conn.commit()
+
+
+def get_thread(user_id):
+    cursor.execute("SELECT thread_id FROM tickets WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+
+def add_ticket(user_id, thread_id):
+    cursor.execute("REPLACE INTO tickets (user_id, thread_id) VALUES (?, ?)", (user_id, thread_id))
+    conn.commit()
+
+
+def remove_ticket(user_id):
+    cursor.execute("DELETE FROM tickets WHERE user_id = ?", (user_id,))
+    conn.commit()
+
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+
 
 @bot.event
 async def on_message(message):
@@ -26,64 +55,56 @@ async def on_message(message):
         guild = bot.guilds[0]
         modmail_channel = guild.get_channel(MODMAIL_CHANNEL_ID)
 
-        thread = active_threads.get(message.author.id)
+        thread_id = get_thread(message.author.id)
 
-        if thread is None:
+        if thread_id:
+            thread = guild.get_thread(thread_id)
+        else:
             thread = await modmail_channel.create_thread(
                 name=f"modmail-{message.author}",
                 type=discord.ChannelType.private_thread
             )
-            active_threads[message.author.id] = thread
+            add_ticket(message.author.id, thread.id)
 
             await thread.send(f"📨 New ticket from {message.author} ({message.author.id})")
-            await message.author.send("✅ Your message has been sent to the moderators.")
+            await message.author.send("✅ Your message has been sent to moderators.")
 
-        # send message + attachments
-        content = message.content or ""
         files = [await a.to_file() for a in message.attachments]
-
-        await thread.send(content, files=files)
+        await thread.send(message.content or "", files=files)
 
     # 💬 Staff → user
     elif isinstance(message.channel, discord.Thread):
         if message.channel.parent_id != MODMAIL_CHANNEL_ID:
-            return  # ignore other threads
+            return
 
-        # find user
-        user_id = None
-        for uid, thread in active_threads.items():
-            if thread.id == message.channel.id:
-                user_id = uid
-                break
+        cursor.execute("SELECT user_id FROM tickets WHERE thread_id = ?", (message.channel.id,))
+        result = cursor.fetchone()
 
-        if user_id:
-            user = await bot.fetch_user(user_id)
-
+        if result:
+            user = await bot.fetch_user(result[0])
             files = [await a.to_file() for a in message.attachments]
-            await user.send(message.content, files=files)
+            await user.send(message.content or "", files=files)
 
     await bot.process_commands(message)
 
-# ❌ Close command
+
 @bot.command()
 async def close(ctx):
     if not isinstance(ctx.channel, discord.Thread):
         return
 
-    # find user
-    user_id = None
-    for uid, thread in active_threads.items():
-        if thread.id == ctx.channel.id:
-            user_id = uid
-            break
+    cursor.execute("SELECT user_id FROM tickets WHERE thread_id = ?", (ctx.channel.id,))
+    result = cursor.fetchone()
 
-    if user_id:
+    if result:
+        user_id = result[0]
         user = await bot.fetch_user(user_id)
-        await user.send("🔒 Your modmail ticket has been closed.")
 
-        del active_threads[user_id]
+        await user.send("🔒 Your ticket has been closed.")
+        remove_ticket(user_id)
 
     await ctx.send("✅ Ticket closed.")
     await ctx.channel.delete()
+
 
 bot.run(os.getenv("TOKEN"))
