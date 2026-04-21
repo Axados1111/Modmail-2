@@ -3,15 +3,25 @@ from discord.ext import commands
 import os
 import sqlite3
 
+# ─────────────────────────────
+# INTENTS
+# ─────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ─────────────────────────────
+# ENV VARIABLES
+# ─────────────────────────────
+TOKEN = os.getenv("TOKEN")
 MODMAIL_CHANNEL_ID = int(os.getenv("MODMAIL_CHANNEL_ID"))
+GUILD_ID = int(os.getenv("GUILD_ID"))  # IMPORTANT (recommended)
 
-# 🗄️ SQLite setup
+# ─────────────────────────────
+# SQLITE SETUP
+# ─────────────────────────────
 conn = sqlite3.connect("modmail.db")
 cursor = conn.cursor()
 
@@ -23,7 +33,9 @@ CREATE TABLE IF NOT EXISTS tickets (
 """)
 conn.commit()
 
-
+# ─────────────────────────────
+# HELPERS
+# ─────────────────────────────
 def get_thread(user_id):
     cursor.execute("SELECT thread_id FROM tickets WHERE user_id = ?", (user_id,))
     result = cursor.fetchone()
@@ -31,7 +43,10 @@ def get_thread(user_id):
 
 
 def add_ticket(user_id, thread_id):
-    cursor.execute("REPLACE INTO tickets (user_id, thread_id) VALUES (?, ?)", (user_id, thread_id))
+    cursor.execute(
+        "REPLACE INTO tickets (user_id, thread_id) VALUES (?, ?)",
+        (user_id, thread_id)
+    )
     conn.commit()
 
 
@@ -39,24 +54,30 @@ def remove_ticket(user_id):
     cursor.execute("DELETE FROM tickets WHERE user_id = ?", (user_id,))
     conn.commit()
 
-
+# ─────────────────────────────
+# READY EVENT
+# ─────────────────────────────
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-
+# ─────────────────────────────
+# MAIN MODMAIL SYSTEM
+# ─────────────────────────────
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # 📩 DM → modmail
+    guild = bot.get_guild(GUILD_ID)
+
+    # ───── USER DM → MODMAIL ─────
     if isinstance(message.channel, discord.DMChannel):
-        guild = bot.guilds[0]
         modmail_channel = guild.get_channel(MODMAIL_CHANNEL_ID)
 
         thread_id = get_thread(message.author.id)
 
+        # create thread if not exists
         if thread_id:
             thread = guild.get_thread(thread_id)
         else:
@@ -64,47 +85,75 @@ async def on_message(message):
                 name=f"modmail-{message.author}",
                 type=discord.ChannelType.public_thread
             )
+
             add_ticket(message.author.id, thread.id)
 
-            await thread.send(f"📨 New ticket from {message.author} ({message.author.id})")
-            await message.author.send("✅ Your message has been sent to moderators.")
+            await thread.send(
+                f"📨 New ticket from **{message.author}** ({message.author.id})"
+            )
 
+            try:
+                await message.author.send("✅ Your message has been sent to staff.")
+            except:
+                pass
+
+        # send message + attachments
         files = [await a.to_file() for a in message.attachments]
         await thread.send(message.content or "", files=files)
 
-    # 💬 Staff → user
+    # ───── STAFF REPLY → USER ─────
     elif isinstance(message.channel, discord.Thread):
         if message.channel.parent_id != MODMAIL_CHANNEL_ID:
             return
 
-        cursor.execute("SELECT user_id FROM tickets WHERE thread_id = ?", (message.channel.id,))
+        cursor.execute(
+            "SELECT user_id FROM tickets WHERE thread_id = ?",
+            (message.channel.id,)
+        )
         result = cursor.fetchone()
 
         if result:
             user = await bot.fetch_user(result[0])
+
             files = [await a.to_file() for a in message.attachments]
             await user.send(message.content or "", files=files)
 
     await bot.process_commands(message)
 
-
+# ─────────────────────────────
+# CLOSE COMMAND (STAFF ONLY)
+# ─────────────────────────────
 @bot.command()
 async def close(ctx):
     if not isinstance(ctx.channel, discord.Thread):
         return
 
-    cursor.execute("SELECT user_id FROM tickets WHERE thread_id = ?", (ctx.channel.id,))
+    # permission check
+    if not ctx.author.guild_permissions.manage_messages:
+        await ctx.send("❌ No permission.")
+        return
+
+    cursor.execute(
+        "SELECT user_id FROM tickets WHERE thread_id = ?",
+        (ctx.channel.id,)
+    )
     result = cursor.fetchone()
 
     if result:
         user_id = result[0]
         user = await bot.fetch_user(user_id)
 
-        await user.send("🔒 Your ticket has been closed.")
+        try:
+            await user.send("🔒 Your ticket has been closed.")
+        except:
+            pass
+
         remove_ticket(user_id)
 
-    await ctx.send("✅ Ticket closed.")
+    await ctx.send("✅ Closing ticket...")
     await ctx.channel.delete()
 
-
-bot.run(os.getenv("TOKEN"))
+# ─────────────────────────────
+# RUN BOT
+# ─────────────────────────────
+bot.run(TOKEN)
