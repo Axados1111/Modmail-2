@@ -106,40 +106,5 @@ async def close(ctx):
     await ctx.send("✅ Ticket closed.")
     await ctx.channel.delete()
 
-    @bot.command()
-async def close(ctx):
-    # Make sure it's used inside a thread
-    if not isinstance(ctx.channel, discord.Thread):
-        await ctx.send("❌ This command can only be used inside a modmail thread.")
-        return
 
-    # Make sure it's a modmail thread
-    if ctx.channel.parent_id != MODMAIL_CHANNEL_ID:
-        return
-
-    # Find the user linked to this thread
-    cursor.execute("SELECT user_id FROM tickets WHERE thread_id = ?", (ctx.channel.id,))
-    result = cursor.fetchone()
-
-    if result:
-        user_id = result[0]
-        user = await bot.fetch_user(user_id)
-
-        try:
-            await user.send("🔒 Your modmail ticket has been closed.")
-        except:
-            pass  # user might have DMs off
-
-        # Remove from database
-        cursor.execute("DELETE FROM tickets WHERE user_id = ?", (user_id,))
-        conn.commit()
-
-    await ctx.send("✅ Ticket closed.")
-
-    # Delete the thread
-    if not ctx.author.guild_permissions.manage_messages:
-    await ctx.send("❌ You don't have permission to close tickets.")
-    return
-    
-    await ctx.channel.delete()
 bot.run(os.getenv("TOKEN"))
