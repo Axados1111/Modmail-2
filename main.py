@@ -10,7 +10,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 MODMAIL_CHANNEL_ID = int(os.getenv("MODMAIL_CHANNEL_ID"))
 
-# In-memory storage (no database)
 active_threads = {}
 
 @bot.event
@@ -22,7 +21,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # 📩 User DM → create/send to modmail thread
+    # 📩 DM → modmail
     if isinstance(message.channel, discord.DMChannel):
         guild = bot.guilds[0]
         modmail_channel = guild.get_channel(MODMAIL_CHANNEL_ID)
@@ -36,18 +35,55 @@ async def on_message(message):
             )
             active_threads[message.author.id] = thread
 
-            await thread.send(f"📨 New modmail from {message.author} ({message.author.id})")
+            await thread.send(f"📨 New ticket from {message.author} ({message.author.id})")
+            await message.author.send("✅ Your message has been sent to the moderators.")
 
-        await thread.send(message.content)
+        # send message + attachments
+        content = message.content or ""
+        files = [await a.to_file() for a in message.attachments]
 
-    # 💬 Staff reply → send back to user
+        await thread.send(content, files=files)
+
+    # 💬 Staff → user
     elif isinstance(message.channel, discord.Thread):
-        for user_id, thread in active_threads.items():
+        if message.channel.parent_id != MODMAIL_CHANNEL_ID:
+            return  # ignore other threads
+
+        # find user
+        user_id = None
+        for uid, thread in active_threads.items():
             if thread.id == message.channel.id:
-                user = await bot.fetch_user(user_id)
-                await user.send(message.content)
+                user_id = uid
                 break
 
+        if user_id:
+            user = await bot.fetch_user(user_id)
+
+            files = [await a.to_file() for a in message.attachments]
+            await user.send(message.content, files=files)
+
     await bot.process_commands(message)
+
+# ❌ Close command
+@bot.command()
+async def close(ctx):
+    if not isinstance(ctx.channel, discord.Thread):
+        return
+
+    # find user
+    user_id = None
+    for uid, thread in active_threads.items():
+        if thread.id == ctx.channel.id:
+            user_id = uid
+            break
+
+    if user_id:
+        user = await bot.fetch_user(user_id)
+        await user.send("🔒 Your modmail ticket has been closed.")
+
+        del active_threads[user_id]
+
+    await ctx.send("✅ Ticket closed.")
+    await ctx.channel.delete()
 
 bot.run(os.getenv("TOKEN"))
