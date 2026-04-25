@@ -62,7 +62,7 @@ async def on_message(message):
         else:
             thread = await modmail_channel.create_thread(
                 name=f"modmail-{message.author}",
-                type=discord.ChannelType.private_thread
+                type=discord.ChannelType.public_thread
             )
             add_ticket(message.author.id, thread.id)
 
