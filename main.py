@@ -66,7 +66,7 @@ async def on_message(message):
             )
             add_ticket(message.author.id, thread.id)
 
-            await thread.send(f"📨 New ticket from {message.author} ({message.author.id})")
+            await thread.send(f"📨 New ticket from {message.author})")
             await message.author.send("✅ Your message has been sent to moderators.")
 
         files = [await a.to_file() for a in message.attachments]
